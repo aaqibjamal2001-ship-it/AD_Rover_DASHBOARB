@@ -6,3 +6,4 @@ services:
     startCommand: python Counter.py
     envVars:
       PUBLIC_BASE_URL: ${RENDER_EXTERNAL_URL}
+    healthCheckPath: /healthz
