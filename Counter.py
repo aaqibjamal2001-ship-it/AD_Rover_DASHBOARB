@@ -5,17 +5,25 @@ import qrcode
 import socket
 import random
 import string
+import io
+import csv
 from datetime import datetime, timedelta, timezone
 try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
 from fastapi import FastAPI, Path, HTTPException, Request
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import threading
 import time
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+except Exception:
+    A4 = None
+    canvas = None
 
 # --- CONFIGURATION ---
 # The QR ID acts as a unique identifier for this specific robot/campaign
@@ -31,7 +39,7 @@ TARGET_REDIRECT_URL = "https://www.google.com/search?q=your+advertising+landing+
 CAFE_PROMO_REDIRECT_URL = "https://www.google.com/search?q=cafe+lounge+20+percent+off+coupon"
 
 # SQLite database file
-DB_FILE = "qr_counter.db"
+DB_FILE = os.getenv("DB_FILE", "qr_counter.db")
 
 # QR code image path
 QR_CODE_PATH = "static/qrcode.png"
@@ -246,8 +254,7 @@ def get_promo_code_html(promo_data, qr_id):
                 </div>
                 <p>Show this code to the cashier to redeem your 10% discount:</p>
                 <div class="promo-code">{code}</div>
-                <div class="expiry">
-                    Code expires at: {expires_at.strftime("%I:%M %p")} today<br>
+                <div class="timer">
                     <span class="remaining">({remaining_minutes} minutes remaining)</span>
                 </div>
                 <div class="instructions">
@@ -317,6 +324,8 @@ def get_dashboard_html(qr_id, total_count, adrover_count, other_count, recent_sc
             th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
             th {{ background-color: #f2f2f2; }}
             tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            .downloads {{ margin: 10px 0; }}
+            .downloads a {{ margin-right: 10px; display: inline-block; padding: 8px 12px; background: #4CAF50; color: white; border-radius: 4px; text-decoration: none; }}
         </style>
         <script>
             async function refreshStats() {{
@@ -339,6 +348,10 @@ def get_dashboard_html(qr_id, total_count, adrover_count, other_count, recent_sc
             <div class="header">
                 <h1>QR Code Scan Dashboard</h1>
                 <p>Campaign ID: {qr_id}</p>
+                <div class="downloads">
+                    <a href="/export/{qr_id}/csv" download>Download CSV</a>
+                    <a href="/export/{qr_id}/pdf" download>Download PDF</a>
+                </div>
             </div>
             <div class="content">
                 <div class="card">
@@ -473,7 +486,6 @@ def get_promo_code_html(promo_data, qr_id):
                 
                 <div class="promo-code">{code}</div>
                 
-                <div class="expiry">Valid until {expires_at_fmt} (15 minutes from scan)</div>
                 <div class="timer">({minutes_remaining} minutes remaining)</div>
                 
                 <p class="instructions">
@@ -539,6 +551,92 @@ async def api_stats(qr_id: str = Path(..., title="The ID of the QR code campaign
             for (ts, ip, src) in recent_scans
         ]
     }
+
+@app.get("/export/{qr_id}/csv")
+async def export_csv(qr_id: str = Path(..., title="The ID of the QR code campaign")):
+    """Export all scans for the given QR ID as CSV."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT timestamp, ip_address, source FROM qr_scans WHERE qr_id = ? ORDER BY id ASC",
+        (qr_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["timestamp_utc", "local_time_display", "ip_address", "source"])
+    for ts, ip, src in rows:
+        writer.writerow([ts, format_time_str(ts), ip, src or "other"])
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={qr_id}_scans.csv"}
+    )
+
+@app.get("/export/{qr_id}/pdf")
+async def export_pdf(qr_id: str = Path(..., title="The ID of the QR code campaign")):
+    """Export all scans for the given QR ID as a PDF report."""
+    if canvas is None or A4 is None:
+        return Response(
+            content="PDF export not available (reportlab not installed).",
+            media_type="text/plain",
+            status_code=501
+        )
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT timestamp, ip_address, source FROM qr_scans WHERE qr_id = ? ORDER BY id ASC",
+        (qr_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 40
+    y = height - margin
+    title = f"Scan Data Report - {qr_id}"
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margin, y, title)
+    y -= 24
+    c.setFont("Helvetica", 12)
+    c.drawString(margin, y, f"Total scans: {len(rows)}")
+    y -= 18
+    c.drawString(margin, y, f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= 24
+    # Table header
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(margin, y, "UTC Timestamp")
+    c.drawString(margin + 160, y, "Local Time")
+    c.drawString(margin + 300, y, "IP Address")
+    c.drawString(margin + 430, y, "Source")
+    y -= 14
+    c.setFont("Helvetica", 10)
+    for ts, ip, src in rows:
+        if y < margin + 40:
+            c.showPage()
+            y = height - margin
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(margin, y, "UTC Timestamp")
+            c.drawString(margin + 160, y, "Local Time")
+            c.drawString(margin + 300, y, "IP Address")
+            c.drawString(margin + 430, y, "Source")
+            y -= 14
+            c.setFont("Helvetica", 10)
+        c.drawString(margin, y, ts)
+        c.drawString(margin + 160, y, format_time_str(ts))
+        c.drawString(margin + 300, y, ip)
+        c.drawString(margin + 430, y, (src or "other"))
+        y -= 12
+    c.save()
+    buffer.seek(0)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={qr_id}_scans.pdf"}
+    )
 
 @app.get("/qrcode/{qr_id}")
 async def get_qr_code(qr_id: str = Path(..., title="The ID of the QR code campaign")):
