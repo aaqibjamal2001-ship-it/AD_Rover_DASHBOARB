@@ -5,7 +5,11 @@ import qrcode
 import socket
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 from fastapi import FastAPI, Path, HTTPException, Request
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +41,7 @@ SERVER_PORT = int(os.getenv("PORT", "8000"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
+DISPLAY_TIMEZONE = os.getenv("DISPLAY_TIMEZONE", "Asia/Karachi")
 
 # Get the machine's IP address
 def get_ip_address():
@@ -264,10 +269,32 @@ def get_promo_code_html(promo_data, qr_id):
 
 def format_time_str(ts_str: str) -> str:
     try:
-        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%I:%M%p").lower().lstrip('0')
+        # Treat stored timestamp as UTC and convert to display timezone
+        dt_utc = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if ZoneInfo and DISPLAY_TIMEZONE:
+            dt_local = dt_utc.astimezone(ZoneInfo(DISPLAY_TIMEZONE))
+        else:
+            # Fallback: use system local timezone
+            dt_local = dt_utc.astimezone()
+        return dt_local.strftime("%I:%M %p").lstrip('0')
     except Exception:
         return ts_str
+
+def get_client_ip(request: Request) -> str:
+    """Extract the real client IP, respecting proxy headers."""
+    try:
+        # X-Forwarded-For may contain a list: client, proxy1, proxy2
+        xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+        if xff:
+            ip = xff.split(",")[0].strip()
+            if ip:
+                return ip
+        xri = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")
+        if xri:
+            return xri.strip()
+        return (request.client.host if request and request.client else "unknown")
+    except Exception:
+        return "unknown"
 
 def get_dashboard_html(qr_id, total_count, adrover_count, other_count, recent_scans):
     scans_html = ""
@@ -546,7 +573,7 @@ async def scan_qr_code(
 
         # No valid cookie promo, record the scan ONCE and issue a new code
         try:
-            ip_address = request.client.host if request else "unknown"
+            ip_address = get_client_ip(request)
             source = None
             try:
                 source = request.query_params.get("src", None)
@@ -557,7 +584,8 @@ async def scan_qr_code(
 
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Store timestamps in UTC for consistent display
+            timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(
                 "INSERT INTO qr_scans (qr_id, timestamp, ip_address, source) VALUES (?, ?, ?, ?)",
                 (qr_id, timestamp, ip_address, source)
