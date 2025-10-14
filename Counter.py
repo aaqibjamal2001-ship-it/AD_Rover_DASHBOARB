@@ -142,6 +142,26 @@ def generate_promo_code(qr_id):
         "expires_at": expires_at
     }
 
+def get_promo_by_code(qr_id: str, code: str):
+    """Fetch promo code record by code and qr_id; returns None if missing."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT code, qr_id, created_at, expires_at, used FROM promo_codes WHERE qr_id = ? AND code = ?",
+            (qr_id, code)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        created_at = datetime.strptime(row[2], "%Y-%m-%d %H:%M:%S")
+        expires_at = datetime.strptime(row[3], "%Y-%m-%d %H:%M:%S")
+        used = int(row[4] or 0)
+        return {"code": row[0], "qr_id": row[1], "created_at": created_at, "expires_at": expires_at, "used": used}
+    except Exception:
+        return None
+
 # Generate QR code
 def generate_qr_code(data, output_path=QR_CODE_PATH):
     qr = qrcode.QRCode(
@@ -506,42 +526,64 @@ async def scan_qr_code(
     """
     Records a QR code scan in the SQLite database and either displays a promo code or redirects to the target URL.
     """
-    try:
-        # Get client IP address and source (adrover/printed/other)
-        ip_address = request.client.host if request else "unknown"
-        source = None
-        try:
-            source = request.query_params.get("src", None)
-        except Exception:
-            source = None
-        if not source:
-            source = "other"
-        
-        # Connect to database and record the scan
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        cursor.execute(
-            "INSERT INTO qr_scans (qr_id, timestamp, ip_address, source) VALUES (?, ?, ?, ?)",
-            (qr_id, timestamp, ip_address, source)
-        )
-        conn.commit()
-        conn.close()
-        
-        print(f"Scan recorded for '{qr_id}' from IP {ip_address} (source={source})")
-    except Exception as e:
-        print(f"Failed to record scan for '{qr_id}'. Error: {e}")
-    
-    # For cafe promotion QR code, generate a unique promo code and display it
+    # For cafe promotion QR code, implement refresh-safe behavior using cookies
     if qr_id == CAFE_PROMO_QR_ID:
+        # Try to reuse an existing promo code from cookie if still valid
+        existing_code = None
         try:
-            # Generate a unique promo code that expires in 15 minutes
+            existing_code = request.cookies.get(f"promo_code_{qr_id}")
+        except Exception:
+            existing_code = None
+
+        if existing_code:
+            promo = get_promo_by_code(qr_id, existing_code)
+            if promo:
+                now_dt = datetime.now()
+                if promo.get("expires_at") and promo["expires_at"] > now_dt and int(promo.get("used", 0)) == 0:
+                    # Reuse existing code and DO NOT increment scan again
+                    html = get_promo_code_html(promo, qr_id)
+                    return HTMLResponse(content=html)
+
+        # No valid cookie promo, record the scan ONCE and issue a new code
+        try:
+            ip_address = request.client.host if request else "unknown"
+            source = None
+            try:
+                source = request.query_params.get("src", None)
+            except Exception:
+                source = None
+            if not source:
+                source = "other"
+
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                "INSERT INTO qr_scans (qr_id, timestamp, ip_address, source) VALUES (?, ?, ?, ?)",
+                (qr_id, timestamp, ip_address, source)
+            )
+            conn.commit()
+            conn.close()
+            print(f"Scan recorded for '{qr_id}' from IP {ip_address} (source={source})")
+        except Exception as e:
+            print(f"Failed to record scan for '{qr_id}'. Error: {e}")
+
+        # Generate and return a new promo code; set cookie to prevent recount on refresh
+        try:
             promo_data = generate_promo_code(qr_id)
             print(f"Generated promo code: {promo_data['code']} for {qr_id}")
-            
-            # Return HTML page with the promo code
-            return get_promo_code_html(promo_data, qr_id)
+            html = get_promo_code_html(promo_data, qr_id)
+            resp = HTMLResponse(content=html)
+            # Cookie lasts until promo expiry (max_age seconds)
+            max_age = max(60, int((promo_data["expires_at"] - datetime.now()).total_seconds()))
+            resp.set_cookie(
+                key=f"promo_code_{qr_id}",
+                value=promo_data["code"],
+                max_age=max_age,
+                httponly=True,
+                samesite="Lax"
+            )
+            return resp
         except Exception as e:
             print(f"Error generating promo code: {e}")
             return HTMLResponse(content=f"<html><body><h1>Error</h1><p>Could not generate promo code: {e}</p></body></html>")
