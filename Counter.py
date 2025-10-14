@@ -11,8 +11,6 @@ from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import threading
-import cv2
-import numpy as np
 import time
 
 # --- CONFIGURATION ---
@@ -554,6 +552,9 @@ async def scan_qr_code(
 # Function to display QR code with OpenCV
 def display_qr_with_opencv():
     """Display the QR code in a window with real-time scan count."""
+    # Lazy import heavy modules to avoid slowing server startup
+    import cv2
+    import numpy as np
     # Load the QR code image
     img = cv2.imread(QR_CODE_PATH)
     if img is None:
