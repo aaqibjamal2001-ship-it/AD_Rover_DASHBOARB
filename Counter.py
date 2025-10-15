@@ -50,6 +50,7 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 DISPLAY_TIMEZONE = os.getenv("DISPLAY_TIMEZONE", "Asia/Karachi")
+STREAMLIT_BASE_URL = os.getenv("STREAMLIT_BASE_URL")
 
 # Get the machine's IP address
 def get_ip_address():
@@ -524,6 +525,10 @@ async def show_dashboard(
     qr_id: str = Path(..., title="The ID of the QR code campaign")
 ):
     """Serves the HTML dashboard page."""
+    # If a Streamlit base URL is provided, redirect old dashboard path to Streamlit
+    if STREAMLIT_BASE_URL:
+        target = f"{STREAMLIT_BASE_URL.rstrip('/')}/?view=dashboard&qr_id={qr_id}"
+        return RedirectResponse(url=target, status_code=301)
     # Get scan count and recent scans
     total_count = get_scan_count(qr_id)
     adrover_count = get_scan_count(qr_id, source="adrover")
@@ -641,6 +646,10 @@ async def export_pdf(qr_id: str = Path(..., title="The ID of the QR code campaig
 @app.get("/qrcode/{qr_id}")
 async def get_qr_code(qr_id: str = Path(..., title="The ID of the QR code campaign")):
     """Returns the QR code image."""
+    # Redirect to Streamlit QR page if configured, otherwise serve static file
+    if STREAMLIT_BASE_URL:
+        target = f"{STREAMLIT_BASE_URL.rstrip('/')}/?view=qrcode"
+        return RedirectResponse(url=target, status_code=301)
     return FileResponse(QR_CODE_PATH)
 
 @app.get("/scan/{qr_id}", response_class=HTMLResponse)
@@ -651,6 +660,19 @@ async def scan_qr_code(
     """
     Records a QR code scan in the SQLite database and either displays a promo code or redirects to the target URL.
     """
+    # If a Streamlit base URL is provided, redirect old scan path to Streamlit scan view
+    if STREAMLIT_BASE_URL:
+        src = None
+        try:
+            src = request.query_params.get("src") if request else None
+        except Exception:
+            src = None
+        base = STREAMLIT_BASE_URL.rstrip('/')
+        qp = f"view=scan&qr_id={qr_id}"
+        if src:
+            qp += f"&src={src}"
+        target = f"{base}/?{qp}"
+        return RedirectResponse(url=target, status_code=301)
     # For cafe promotion QR code, implement refresh-safe behavior using cookies
     if qr_id == CAFE_PROMO_QR_ID:
         # Try to reuse an existing promo code from cookie if still valid
