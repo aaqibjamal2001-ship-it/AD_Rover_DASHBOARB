@@ -12,5 +12,7 @@ fastapi
 uvicorn[standard]
 qrcode
 Pillow
-reportlab
-streamlit
+dropbox
+requests
+SQLAlchemy>=2.0
+psycopg2-binary
