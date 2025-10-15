@@ -13,3 +13,4 @@ uvicorn[standard]
 qrcode
 Pillow
 reportlab
+streamlit
