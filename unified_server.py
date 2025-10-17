@@ -340,95 +340,6 @@ class UnifiedServer:
         self._db.row_factory = sqlite3.Row
         self._db_lock = asyncio.Lock()
         self._init_db()
-        
-        # Initialize display window
-        cv2.namedWindow('Unified Server Display', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Unified Server Display', 960, 720)
-        print(f"[SERVER] Initialized with host: {host}, port: {port}, engine: {engine}")
-        print(f"[SERVER] Display window created")
-        
-        # FPS calculation
-        self.fps_counter = 0
-        self.fps_start_time = time.time()
-        self.last_fps_value = None
-        
-    def _calc_fps(self):
-        """Calculate FPS for display"""
-        self.fps_counter += 1
-        if self.fps_counter >= 30:
-            elapsed = time.time() - self.fps_start_time
-            if elapsed > 0:
-                fps = self.fps_counter / elapsed
-                self.fps_counter = 0
-                self.fps_start_time = time.time()
-                self.last_fps_value = fps
-                return fps
-        # return last known value to have a stable readout between updates
-        return self.last_fps_value
-        
-    def _draw_overlay(self, frame, analytics):
-        """Draw analytics overlay on frame"""
-        if not analytics:
-            return frame
-            
-        h, w = frame.shape[:2]
-        out = frame.copy()
-        panel_w, panel_h = 460, 200
-        overlay = out.copy()
-        cv2.rectangle(overlay, (10, 10), (10 + panel_w, 10 + panel_h), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.4, out, 0.6, 0, out)
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        fs = 0.55
-        y = 35
-        def put(text):
-            nonlocal y
-            cv2.putText(out, text, (20, y), font, fs, (0, 255, 0), 1)
-            y += 22
-
-        # Show server-side FPS in panel
-        fps_panel = self._calc_fps()
-        if fps_panel is not None:
-            put(f"Server FPS(avg): {fps_panel:.1f}")
-        else:
-            put("Server FPS(avg): --")
-            
-        if 'server_avg_fps' in analytics:
-            put(f"Processing FPS(avg): {analytics.get('server_avg_fps', 0):.1f}")
-            
-        put(f"Persons: {analytics.get('total_persons', 0)} | Faces: {analytics.get('total_faces', 0)}")
-        
-        if 'unique_tracked_persons' in analytics:
-            put(f"Unique tracked persons: {analytics['unique_tracked_persons']}")
-        if 'current_tracked_persons' in analytics:
-            put(f"Current tracked persons: {analytics['current_tracked_persons']}")
-            
-        tg = analytics.get('tracked_gender_counts') or {}
-        if tg:
-            put(f"Tracked genders M:{tg.get('male',0)} F:{tg.get('female',0)} U:{tg.get('unknown',0)}")
-
-        # Draw FPS (top-right)
-        fps = self._calc_fps()
-        if fps:
-            cv2.putText(out, f"FPS: {fps:.1f}", (w - 120, 28), font, 0.6, (0, 255, 255), 2)
-            
-        # Draw tracked person boxes with ID labels
-        for tp in analytics.get('tracked_persons', []) or []:
-            bx = tp.get('bbox')
-            tid = tp.get('id')
-            if not bx:
-                continue
-            x, y, bw, bh = bx
-            x1 = int(x * w)
-            y1 = int(y * h)
-            x2 = int((x + bw) * w)
-            y2 = int((y + bh) * h)
-            cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            if tid is not None:
-                label = f"ID {tid}"
-                cv2.putText(out, label, (x1, max(0, y1 - 6)), font, 0.5, (0, 200, 255), 1)
-                
-        return out
 
     def _init_db(self):
         cur = self._db.cursor()
@@ -511,22 +422,17 @@ class UnifiedServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
-        print(f"[SERVER] Client connected from {addr}")
         try:
             while True:
                 try:
                     ad_id, frame = await parse_request(reader)
-                    print(f"[SERVER] Received frame from client {addr}")
                 except asyncio.IncompleteReadError:
-                    print(f"[SERVER] Client {addr} disconnected")
                     break
-                except Exception as e:
+                except Exception:
                     # Malformed request
-                    print(f"[SERVER] Error receiving frame from {addr}: {str(e)}")
                     break
 
                 if frame is None:
-                    print(f"[SERVER] Invalid frame received from {addr}")
                     await write_response(writer, {"status": "error", "message": "invalid_frame"})
                     continue
 
@@ -535,30 +441,16 @@ class UnifiedServer:
                 if max(h, w) > 1280:
                     scale = 1280.0 / max(h, w)
                     frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                    print(f"[SERVER] Resized frame to {int(w * scale)}x{int(h * scale)}")
 
-                print(f"[SERVER] Processing frame from {addr}")
                 analytics = self._engine.process(frame)
-                
-                # Draw overlay on frame with analytics data
-                disp_frame = self._draw_overlay(frame, analytics)
-                
-                # Display the frame
-                cv2.imshow('Unified Server Display', disp_frame)
-                cv2.waitKey(1)  # Process UI events
-                
-                print(f"[SERVER] Frame displayed, sending analytics to client {addr}")
-                
                 payload = {"status": "success", "analytics": analytics}
                 if ad_id is not None:
                     payload["ad_id"] = ad_id
                 await write_response(writer, payload)
-                
                 # Persist asynchronously (best-effort)
                 try:
                     await self._save_analytics(ad_id, analytics)
-                except Exception as e:
-                    print(f"[SERVER] Error saving analytics: {str(e)}")
+                except Exception:
                     pass
         finally:
             try:
@@ -569,8 +461,6 @@ class UnifiedServer:
 
     async def start(self):
         server = await asyncio.start_server(self._handle, self._host, self._port)
-        print(f"[SERVER] Server started and listening on {self._host}:{self._port}")
-        print(f"[SERVER] Waiting for client connections...")
         async with server:
             await server.serve_forever()
 

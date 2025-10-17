@@ -4,9 +4,8 @@ from PIL import Image, ImageDraw, ImageFont
 import socket
 
 # Configuration
+PROMO_QR_PATH = "static/cafe_promo_qr.png"
 QR_ID = "cafe_promo"
-PROMO_QR_PATH_ADROVER = "static/cafe_promo_qr_adrover.png"
-PROMO_QR_PATH_PRINTED = "static/cafe_promo_qr_print.png"
 SERVER_PORT = 8000
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
@@ -26,10 +25,18 @@ def get_ip_address():
 
 SERVER_HOST = get_ip_address()
 
-def create_portrait_promo_qr(scan_url: str, output_path: str, label: str):
+def create_portrait_promo_qr():
     """Create a portrait-oriented QR code with promotional text"""
     # Create directory if it doesn't exist
     os.makedirs("static", exist_ok=True)
+    
+    # Generate the QR code URL
+    base = (PUBLIC_BASE_URL or RENDER_EXTERNAL_URL or DEFAULT_PUBLIC_BASE_URL)
+    # Always prefer a public base URL, otherwise fall back to local host:port
+    if base:
+        scan_url = f"{base.rstrip('/')}/scan/{QR_ID}"
+    else:
+        scan_url = f"http://{SERVER_HOST}:{SERVER_PORT}/scan/{QR_ID}"
     
     # Create QR code
     qr = qrcode.QRCode(
@@ -83,7 +90,7 @@ def create_portrait_promo_qr(scan_url: str, output_path: str, label: str):
         small_font = ImageFont.load_default()
     
     # Add title
-    title_text = "10% OFF"
+    title_text = "20% OFF"
     title_width = draw.textlength(title_text, font=title_font)
     title_position = ((canvas_width - title_width) // 2, 50)
     draw.text(title_position, title_text, font=title_font, fill=(255, 0, 0))  # Red color
@@ -107,37 +114,22 @@ def create_portrait_promo_qr(scan_url: str, output_path: str, label: str):
     draw.text(cafe_position, cafe_text, font=regular_font, fill=(0, 0, 0))
     
     # Add validity
-    validity_text = "Offer expires 15 minutes after scan"
+    validity_text = "Valid until December 31, 2023"
     validity_width = draw.textlength(validity_text, font=small_font)
     validity_position = ((canvas_width - validity_width) // 2, cafe_position[1] + 80)
     draw.text(validity_position, validity_text, font=small_font, fill=(100, 100, 100))
     
     # Save the image
-    # Add small source label at the bottom
-    source_label = f"Source: {label}"
-    label_width = draw.textlength(source_label, font=small_font)
-    label_position = ((canvas_width - label_width) // 2, validity_position[1] + 60)
-    draw.text(label_position, source_label, font=small_font, fill=(120, 120, 120))
-
-    canvas.save(output_path)
-    print(f"Promotional QR code created and saved to {output_path}")
+    canvas.save(PROMO_QR_PATH)
+    print(f"Promotional QR code created and saved to {PROMO_QR_PATH}")
     print(f"QR code URL: {scan_url}")
     if PUBLIC_BASE_URL or RENDER_EXTERNAL_URL:
         print("Base URL source: environment variable")
     else:
         print("Base URL source: default Render URL (set PUBLIC_BASE_URL to override)")
     
-    return output_path
+    return PROMO_QR_PATH
 
 if __name__ == "__main__":
-    base = (PUBLIC_BASE_URL or RENDER_EXTERNAL_URL or DEFAULT_PUBLIC_BASE_URL)
-    if base:
-        base = base.rstrip('/')
-    # Compose URLs with src
-    scan_url_adrover = f"{base}/scan/{QR_ID}?src=adrover" if base else f"http://{SERVER_HOST}:{SERVER_PORT}/scan/{QR_ID}?src=adrover"
-    scan_url_printed = f"{base}/scan/{QR_ID}?src=printed" if base else f"http://{SERVER_HOST}:{SERVER_PORT}/scan/{QR_ID}?src=printed"
-
-    path_adrover = create_portrait_promo_qr(scan_url_adrover, PROMO_QR_PATH_ADROVER, "Adrover")
-    path_printed = create_portrait_promo_qr(scan_url_printed, PROMO_QR_PATH_PRINTED, "Printed")
-    print(f"Open Adrover QR at: {os.path.abspath(path_adrover)}")
-    print(f"Open Printed QR at: {os.path.abspath(path_printed)}")
+    promo_qr_path = create_portrait_promo_qr()
+    print(f"Open the image at: {os.path.abspath(promo_qr_path)}")
