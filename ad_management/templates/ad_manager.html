@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jetson Ad Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>📺 Jetson Ad Manager</h1>
+                <div class="status-info">
+                    <span id="status-text">Loading...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Upload Section -->
+        <section class="upload-section">
+            <div class="upload-card">
+                <h2>📤 Upload New Ad</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <div class="upload-icon">📁</div>
+                        <p class="upload-text">
+                            <strong>Click to select files</strong> or drag and drop
+                        </p>
+                        <p class="upload-hint">
+                            Supports: Images (PNG, JPG, GIF, WebP) & Videos (MP4, AVI, MOV, WebM)
+                        </p>
+                        <p class="upload-limit">Max size: 100MB per file</p>
+                    </div>
+                    <input type="file" id="fileInput" accept="image/*,video/*" multiple style="display: none;">
+                </div>
+
+                <!-- Upload Progress -->
+                <div class="upload-progress" id="uploadProgress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <p class="progress-text" id="progressText">Uploading...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Ads List Section -->
+        <section class="ads-section">
+            <div class="ads-header">
+                <h2>📋 Current Ads</h2>
+                <button class="refresh-btn" id="refreshBtn">🔄 Refresh</button>
+            </div>
+
+            <div class="ads-grid" id="adsGrid">
+                <!-- Ads will be loaded here -->
+            </div>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Loading ads...</p>
+            </div>
+
+            <div class="empty-state" id="emptyState" style="display: none;">
+                <div class="empty-icon">📭</div>
+                <h3>No ads found</h3>
+                <p>Upload your first ad to get started!</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Modal for image/video preview -->
+    <div class="modal" id="previewModal">
+        <div class="modal-content">
+            <span class="close" id="closeModal">&times;</span>
+            <div class="modal-body" id="modalBody">
+                <!-- Preview content will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

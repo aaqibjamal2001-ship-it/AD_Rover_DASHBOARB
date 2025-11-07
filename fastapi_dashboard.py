@@ -235,8 +235,8 @@ HTML = """
       <div class="card">
         <h2>KPIs</h2>
         <div class="kpis">
-          <div class="kpi"><div class="num" id="kpi-footfall">0</div><div class="label">Footfall (unique)</div></div>
-          <div class="kpi"><div class="num" id="kpi-unique">0</div><div class="label">Unique Tracked</div></div>
+          <div class="kpi"><div class="num" id="kpi-footfall">0</div><div class="label">Footfall</div></div>
+        <!-- <div class="kpi"><div class="num" id="kpi-unique">0</div><div class="label">Unique Tracked</div></div> -->
           <div class="kpi"><div class="num" id="kpi-fps">0</div><div class="label">Estimated FPS</div></div>
         </div>
       </div>
@@ -333,6 +333,6 @@ HTML = """
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("fastapi_dashboard:app", host="localhost", port=5100, reload=False)
+    uvicorn.run("fastapi_dashboard:app", host="localhost", port=5000, reload=False)
 
 
