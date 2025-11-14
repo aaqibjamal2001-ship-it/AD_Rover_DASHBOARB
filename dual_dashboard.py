@@ -663,6 +663,13 @@ HTML = """
       .kpi .label { font-size: 12px; color: #9aa4b2; }
       .note { font-size: 12px; color: #9aa4b2; margin-top: 6px; }
       canvas { max-height: 360px; }
+      /* Layout rows */
+      .row { display: grid; gap: 16px; }
+      .row-1col { grid-template-columns: 1fr; }
+      .row-2col { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
+      .row-3col { grid-template-columns: repeat(3, minmax(280px, 1fr)); }
+      /* Medium chart height for specific plots */
+      .canvas-medium { max-height: 280px; }
       .list { list-style: none; padding-left: 0; }
       .list li { padding: 6px 8px; background: #0c0f16; margin-bottom: 6px; border-radius: 6px; }
       /* Ad performance */
@@ -690,8 +697,8 @@ HTML = """
         <button id="resetBtn" style="background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;">Reset Data</button>
       </div>
     </div>
-
-    <div class="grid">
+    <!-- Row 1: Key metrics full width (12 columns equivalent) -->
+    <div class="row row-1col">
       <div class="card">
         <h2>Key Metrics</h2>
         <div class="kpis">
@@ -700,31 +707,34 @@ HTML = """
           <div class="kpi"><div class="num" id="kpi-fps">0</div><div class="label">System Speed (FPS)</div></div>
         </div>
       </div>
+    </div>
 
+    <!-- Row 2: Gender and Age (medium height) in one complete row -->
+    <div class="row row-2col" style="margin-top:16px;">
       <div class="card">
         <h2>Gender Distribution</h2>
-        <canvas id="genderPie"></canvas>
+        <canvas id="genderPie" class="canvas-medium"></canvas>
         <p class="note">Breakdown of detected genders in the selected period.</p>
       </div>
-
       <div class="card">
         <h2>Age Distribution</h2>
-        <canvas id="agePie"></canvas>
+        <canvas id="agePie" class="canvas-medium"></canvas>
         <p class="note">Breakdown of estimated age groups in the selected period.</p>
       </div>
+    </div>
 
+    <!-- Row 3: The other three plots in a single row -->
+    <div class="row row-3col" style="margin-top:16px;">
       <div class="card">
         <h2>Visitors Over Time</h2>
         <canvas id="footfallLine"></canvas>
         <p class="note">Counts of  visitors detected in each time block.</p>
       </div>
-
       <div class="card">
         <h2>Visit Length Distribution</h2>
         <canvas id="presenceHist"></canvas>
         <p class="note">How many visits fall into each length band.</p>
       </div>
-
       <div class="card">
         <h2>Peak Hours</h2>
         <canvas id="hourTrend"></canvas>
