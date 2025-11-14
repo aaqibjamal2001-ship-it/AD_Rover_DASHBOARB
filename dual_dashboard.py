@@ -231,6 +231,42 @@ def query_gender_series(window: str) -> Dict[str, Any]:
     return {"bucketSeconds": bucket_seconds, "series": series}
 
 
+def query_age_summary(window: str) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    if window.endswith("h"):
+        hours = int(window[:-1])
+        start = now - timedelta(hours=hours)
+    elif window.endswith("d"):
+        days = int(window[:-1])
+        start = now - timedelta(days=days)
+    else:
+        start = now - timedelta(hours=1)
+    since_ts = start.timestamp()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+          SUM(CASE WHEN age BETWEEN 0 AND 15 THEN 1 ELSE 0 END) AS child,
+          SUM(CASE WHEN age BETWEEN 16 AND 40 THEN 1 ELSE 0 END) AS young_adult,
+          SUM(CASE WHEN age > 40 THEN 1 ELSE 0 END) AS adult,
+          SUM(CASE WHEN age IS NULL OR age < 0 THEN 1 ELSE 0 END) AS unknown
+        FROM presence_log
+        WHERE end_ts >= ?
+        """,
+        (since_ts,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return {
+        "child": int((row or [0, 0, 0, 0])[0] or 0),
+        "young_adult": int((row or [0, 0, 0, 0])[1] or 0),
+        "adult": int((row or [0, 0, 0, 0])[2] or 0),
+        "unknown": int((row or [0, 0, 0, 0])[3] or 0),
+    }
+
+
 def query_presence_summary(window: str) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     if window.endswith("h"):
@@ -524,6 +560,7 @@ async def websocket_endpoint(ws: WebSocket):
             "summary": query_summary(window),
             "footfall": query_footfall_series(window),
             "gender": query_gender_series(window),
+            "age": query_age_summary(window),
             "presence": query_presence_summary(window),
             "presence_stats": query_presence_stats(window),
             "window": window,
@@ -539,6 +576,7 @@ async def websocket_endpoint(ws: WebSocket):
                     "summary": query_summary(window),
                     "footfall": query_footfall_series(window),
                     "gender": query_gender_series(window),
+                    "age": query_age_summary(window),
                     "presence": query_presence_summary(window),
                     "presence_stats": query_presence_stats(window),
                 }
@@ -670,6 +708,12 @@ HTML = """
       </div>
 
       <div class="card">
+        <h2>Age Distribution</h2>
+        <canvas id="agePie"></canvas>
+        <p class="note">Breakdown of estimated age groups in the selected period.</p>
+      </div>
+
+      <div class="card">
         <h2>Visitors Over Time</h2>
         <canvas id="footfallLine"></canvas>
         <p class="note">Counts of  visitors detected in each time block.</p>
@@ -699,7 +743,7 @@ HTML = """
     <script>
       const wnd = document.getElementById('window');
       let ws;
-      let footfallChart, genderPieChart, presenceHistChart, hourTrendChart;
+      let footfallChart, genderPieChart, agePieChart, presenceHistChart, hourTrendChart;
 
       function fmtTs(t){
         const d = new Date(t * 1000);
@@ -721,6 +765,16 @@ HTML = """
             options: { plugins: { legend: { labels: { color: '#e6e6e6' } } } }
           });
         }
+        if (!agePieChart){
+          agePieChart = new Chart(document.getElementById('agePie'), {
+                type: 'pie',
+                data: {
+                    labels: ['Child (0-15)', 'Young Adult (16-40)', 'Adult (41+)', 'Unknown'],
+                    datasets: [{ data: [0,0,0,0], backgroundColor: ['#ffd54f','#4bd1ff','#a2ff6f','#9aa4b2'] }]
+                },
+                options: { plugins: { legend: { labels: { color: '#e6e6e6' } } } }
+                });
+        }
         if (!presenceHistChart){
           presenceHistChart = new Chart(document.getElementById('presenceHist'), {
             type: 'bar',
@@ -736,7 +790,11 @@ HTML = """
           });
         }
       }
-
+    function renderAgePie(a){
+        const vals = [a.child||0, a.young_adult||0, a.adult||0, a.unknown||0];
+        agePieChart.data.datasets[0].data = vals;
+        agePieChart.update();
+        }
       function updateKPIs(sum, presence){
         const total = Math.round(presence.total_presence_sec||0);
         const sessions = Math.round(presence.sessions||0);
@@ -759,6 +817,15 @@ HTML = """
         genderPieChart.update();
       }
 
+      agePieChart = new Chart(document.getElementById('agePie'), {
+            type: 'pie',
+            data: {
+                labels: ['Child (0-15)', 'Young Adult (16-40)', 'Adult (41+)', 'Unknown'],
+                datasets: [{ data: [0,0,0,0], backgroundColor: ['#ffd54f','#4bd1ff','#a2ff6f','#9aa4b2'] }]
+            },
+            options: { plugins: { legend: { labels: { color: '#e6e6e6' } } } }
+            });
+
       // Simplified: focus on presence stats only
 
       function renderPresenceStats(stats){
@@ -775,16 +842,6 @@ HTML = """
         hourTrendChart.data.labels = hours.map(h => `${h}:00`);
         hourTrendChart.data.datasets[0].data = hourData;
         hourTrendChart.update();
-
-        // Rolling
-        const daily = (stats.rolling && stats.rolling.daily) || [];
-        const ma7 = (stats.rolling && stats.rolling.ma7) || [];
-        const dates = daily.map(d => d.date);
-        rollingTrendChart.data.labels = dates;
-        rollingTrendChart.data.datasets[0].data = daily.map(d => d.avg_sec||0);
-        // Align MA7 to same dates by index
-        rollingTrendChart.data.datasets[1].data = ma7.map(d => d.avg_sec||0);
-        rollingTrendChart.update();
       }
 
       function fmtDuration(sec){
@@ -825,6 +882,9 @@ HTML = """
               renderFootfall(msg.footfall.series||[]);
               const gsum = msg.summary.gender||{male:0,female:0,unknown:0};
               renderGenderPie(gsum);
+              if (msg.age){
+                renderAgePie(msg.age);
+              }
               if (msg.presence_stats){
                 renderPresenceStats(msg.presence_stats);
               }

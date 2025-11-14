@@ -3,12 +3,12 @@
 """
 Unified analytics server  (MiVOLO  |  light DeepFace)
 – TCP 12350  (default)
-– optional --show   : pop-up server-side preview with bbox + ID + gender + dwell
+– optional --show   : pop-up server-side preview with bbox + ID + gender + AGE + dwell
+– age is estimated ONCE per track-ID and stored in DB when the person leaves
 """
 
 import argparse
 import asyncio
-import asyncio.base_events
 import cv2
 import json
 import numpy as np
@@ -17,7 +17,7 @@ import struct
 import time
 import torch
 from collections import deque
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Any
 
 # ----------  speed tweaks  ----------
 torch.set_grad_enabled(False)
@@ -30,7 +30,7 @@ if torch.cuda.is_available():
 #  Base
 # ============================================================================
 class BaseEngine:
-    def process(self, frame_bgr: np.ndarray) -> Dict:
+    def process(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
         raise NotImplementedError
 
 
@@ -70,11 +70,12 @@ class MivoloEngine(BaseEngine):
 
         # -----------  preview  -------------
         self._show_preview = False
-        self._window_name = "Server preview – ID / gender / dwell"
+        self._window_name = "Server preview – ID / gender / age / dwell"
         self._window_created = False
         # ------------------------------------
 
         self._seen_track_id_to_gender: Dict[int, str] = {}
+        self._seen_track_id_to_age: Dict[int, Optional[float]] = {}   # age cache
         self._recent_face_events: List[Tuple] = []
         self._face_event_ttl_sec = 10.0
         self._proc_ms_window: deque = deque(maxlen=60)
@@ -103,24 +104,26 @@ class MivoloEngine(BaseEngine):
             x2 = int((x + bw) * w)
             y2 = int((y + bh) * h)
 
-            rec = self._presence.get(tid)
+            rec   = self._presence.get(tid)
             dwell = int(now - rec["start"]) if rec else 0
             gender = self._seen_track_id_to_gender.get(tid, "unknown")
+            age    = self._seen_track_id_to_age.get(tid)              # age
+            age_str = f"{age:.0f}y" if age is not None else "--y"
 
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 200, 255), 2)
-            label = f"ID:{tid}  {gender}  {dwell}s"
+            label = f"ID:{tid}  {gender}  {age_str}  {dwell}s"
             cv2.putText(out, label, (x1, max(y1 - 6, 15)), font, 0.55, (0, 200, 255), 2)
         return out
 
     # ------------------------------------------------------------------
-    def process(self, frame_bgr: np.ndarray) -> Dict:
+    def process(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         start = time.time()
         detected_objects, _ = self._predictor.recognize(frame_rgb)
         processing_ms = (time.time() - start) * 1000.0
         self._proc_ms_window.append(processing_ms)
 
-        analytics: Dict[str, any] = {
+        analytics: Dict[str, Any] = {
             "timestamp": time.time(),
             "processing_time_ms": processing_ms,
             "total_persons": int(getattr(detected_objects, "n_persons", 0)),
@@ -137,7 +140,7 @@ class MivoloEngine(BaseEngine):
 
             mivolo_person_boxes_xyxy: List[List[float]] = []
             mivolo_person_genders: List[str] = []
-            mivolo_face_boxes_xyxy: List[List[float]] = []
+            mivolo_person_ages: List[Optional[float]] = []
 
             for idx in range(len(boxes)):
                 cls_id = int(classes[idx]) if idx < len(classes) else 0
@@ -171,19 +174,20 @@ class MivoloEngine(BaseEngine):
                     analytics["person_detections"].append(data)
                     mivolo_person_boxes_xyxy.append(xyxy)
                     mivolo_person_genders.append(str(gender).lower() if gender else "unknown")
+                    mivolo_person_ages.append(float(age) if isinstance(age, (int, float)) else None)
                 else:  # face
                     analytics["face_detections"].append(data)
-                    mivolo_face_boxes_xyxy.append(xyxy)
         except Exception:
             pass
 
-        # ----------  tracking + ID + gender + presence  ----------
+        # ----------  tracking + ID + gender + AGE + presence  ----------
         try:
             pre_seen_ids = set(self._seen_track_id_to_gender.keys())
             tr_results = self._tracker.track(frame_bgr, persist=True, conf=0.6, classes=[0], verbose=False)
             tr_boxes = tr_results[0].boxes if tr_results and len(tr_results) > 0 else None
             cur_ids: List[int] = []
             frame_track_gender: Dict[int, str] = {}
+            frame_track_age: Dict[int, Optional[float]] = {}
             h_img, w_img = frame_bgr.shape[:2]
             tracked_persons: List[Dict] = []
 
@@ -216,26 +220,39 @@ class MivoloEngine(BaseEngine):
                         float((t_xyxy[2] - t_xyxy[0]) / w_img),
                         float((t_xyxy[3] - t_xyxy[1]) / h_img),
                     ]
-                    tracked_persons.append({"id": tid, "bbox": tbx})
 
-                    # best gender via IoU
-                    best_iou, best_gender = 0.0, None
-                    for p_xyxy, p_gender in zip(mivolo_person_boxes_xyxy, mivolo_person_genders):
+                    # best gender + age via IoU
+                    best_iou, best_gender, best_age = 0.0, None, None
+                    for p_xyxy, p_gender, p_age in zip(
+                            mivolo_person_boxes_xyxy,
+                            mivolo_person_genders,
+                            mivolo_person_ages):
                         v = iou(t_xyxy, p_xyxy)
                         if v > best_iou:
-                            best_iou, best_gender = v, p_gender
+                            best_iou, best_gender, best_age = v, p_gender, p_age
+
                     if best_iou >= 0.3 and best_gender:
                         self._seen_track_id_to_gender[tid] = best_gender
+                        self._seen_track_id_to_age[tid] = best_age
                         frame_track_gender[tid] = best_gender
-                        # ----  first-seen log  ----
+                        frame_track_age[tid] = best_age
+                        # first-seen log
                         if tid not in pre_seen_ids:
                             print(f"[FIRST] ID:{tid:>3}  gender:{best_gender:<7}  "
-                                  f"first_seen_ts:{time.time():.3f}  "
-                                  "(dwell calculated on exit)")
+                                  f"age:{best_age if best_age is not None else '--':<4}  "
+                                  f"first_seen_ts:{time.time():.3f}")
                     else:
                         self._seen_track_id_to_gender.setdefault(tid, "unknown")
+                        self._seen_track_id_to_age.setdefault(tid, None)
                         if tid not in frame_track_gender:
                             frame_track_gender[tid] = "unknown"
+                            frame_track_age[tid] = None
+
+                    tracked_persons.append({
+                        "id": tid,
+                        "bbox": tbx,
+                        "age": self._seen_track_id_to_age.get(tid)   # age shipped to client
+                    })
 
             # gender counts
             g_m = sum(1 for g in self._seen_track_id_to_gender.values() if g == "male")
@@ -302,7 +319,7 @@ class MivoloEngine(BaseEngine):
                 return inter / union
 
             new_unique_faces = 0
-            for f_xyxy in mivolo_face_boxes_xyxy:
+            for f_xyxy in locals().get("mivolo_face_boxes_xyxy", []) or []:
                 matched = False
                 for prev_xyxy, _ in self._recent_face_events:
                     if iou_face(f_xyxy, prev_xyxy) >= 0.5:
@@ -342,7 +359,7 @@ class DeepfaceLiteEngine(BaseEngine):
         self._yolo = YOLO("yolo11n.pt")
         self._tracked_ids = set()
 
-    def process(self, frame_bgr: np.ndarray) -> Dict:
+    def process(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
         start = time.time()
         results = self._yolo.track(frame_bgr, persist=True, conf=0.6, classes=[0], verbose=False)
         boxes = results[0].boxes if results and len(results) > 0 else []
@@ -388,7 +405,7 @@ async def parse_request(reader: asyncio.StreamReader) -> Tuple[Optional[str], np
     return ad_id, frame
 
 
-async def write_response(writer: asyncio.StreamWriter, payload: Dict):
+async def write_response(writer: asyncio.StreamWriter, payload: Dict[str, Any]):
     data = json.dumps(payload).encode("utf-8")
     writer.write(struct.pack(">I", len(data)) + data)
     await writer.drain()
@@ -459,6 +476,13 @@ class UnifiedServer:
             except sqlite3.OperationalError:
                 pass
 
+        # ----------  NEW: add age column to presence_log  ----------
+        try:
+            cur.execute("ALTER TABLE presence_log ADD COLUMN age REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        # -----------------------------------------------------------
+
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS presence_log (
@@ -468,6 +492,7 @@ class UnifiedServer:
                 start_ts REAL NOT NULL,
                 end_ts REAL NOT NULL,
                 duration_sec REAL NOT NULL
+                ,age REAL                                      -- NEW
             )
             """
         )
@@ -484,7 +509,7 @@ class UnifiedServer:
         self._db.commit()
 
     # ------------------------------------------------------------------
-    async def _save_analytics(self, ad_id: Optional[str], analytics: Dict):
+    async def _save_analytics(self, ad_id: Optional[str], analytics: Dict[str, Any]):
         tg = analytics.get("tracked_gender_counts") or {}
         ng = analytics.get("new_gender_counts") or {}
         row = (
@@ -517,20 +542,23 @@ class UnifiedServer:
                 """,
                 row,
             )
+            # ----------  NEW: save age inside presence_log  ----------
             for ev in analytics.get("presence_events", []) or []:
+                tid = int(ev.get("track_id") or 0)
+                age = self._engine._seen_track_id_to_age.get(tid)   # MiVOLO only
                 cur.execute(
                     """
-                    INSERT INTO presence_log (track_id, ad_id, start_ts, end_ts, duration_sec)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO presence_log (track_id, ad_id, start_ts, end_ts, duration_sec, age)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        int(ev.get("track_id") or 0),
-                        ad_id,
-                        float(ev.get("start_ts") or 0.0),
-                        float(ev.get("end_ts") or 0.0),
-                        float(ev.get("duration_sec") or 0.0),
-                    ),
+                    (tid, ad_id,
+                     float(ev.get("start_ts") or 0.0),
+                     float(ev.get("end_ts") or 0.0),
+                     float(ev.get("duration_sec") or 0.0),
+                     float(age) if age is not None else None)
                 )
+            # ---------------------------------------------------------
+
             # upsert recent tracks
             try:
                 now_ts = time.time()
