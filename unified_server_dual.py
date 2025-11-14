@@ -344,8 +344,8 @@ class MivoloEngine(BaseEngine):
             if not self._window_created:
                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
                 self._window_created = True
-            cv2.imshow(self._window_name, vis)
-            cv2.waitKey(1)  # non-blocking
+            # cv2.imshow(self._window_name, vis)
+            # cv2.waitKey(1)  # non-blocking
 
         return analytics
 

@@ -607,24 +607,24 @@ async def api_ad_stats(window: str = "1h"):
 async def api_current_ad():
     return query_current_ad()
 
-@app.post("/api/reset")
-async def api_reset():
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        # Clear analytics, presence, ad plays, and recent tracks
-        with contextlib.suppress(Exception):
-            cur.execute("DELETE FROM analytics")
-        with contextlib.suppress(Exception):
-            cur.execute("DELETE FROM presence_log")
-        with contextlib.suppress(Exception):
-            cur.execute("DELETE FROM ad_plays")
-        with contextlib.suppress(Exception):
-            cur.execute("DELETE FROM recent_tracks")
-        conn.commit()
-        return {"status": "ok", "message": "All dashboard data cleared."}
-    finally:
-        conn.close()
+# @app.post("/api/reset")
+# async def api_reset():
+#     conn = get_db()
+#     try:
+#         cur = conn.cursor()
+#         # Clear analytics, presence, ad plays, and recent tracks
+#         with contextlib.suppress(Exception):
+#             cur.execute("DELETE FROM analytics")
+#         with contextlib.suppress(Exception):
+#             cur.execute("DELETE FROM presence_log")
+#         with contextlib.suppress(Exception):
+#             cur.execute("DELETE FROM ad_plays")
+#         with contextlib.suppress(Exception):
+#             cur.execute("DELETE FROM recent_tracks")
+#         conn.commit()
+#         return {"status": "ok", "message": "All dashboard data cleared."}
+#     finally:
+#         conn.close()
 
 @app.post("/api/notify_ad_change")
 async def api_notify_ad_change():
@@ -694,7 +694,7 @@ HTML = """
           <option value="24h">Last 24h</option>
           <option value="7d">Last 7d</option>
         </select>
-        <button id="resetBtn" style="background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;">Reset Data</button>
+        <!-- <button id="resetBtn" style="background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;">Reset Data</button> -->
       </div>
     </div>
     <!-- Row 1: Key metrics full width (12 columns equivalent) -->
@@ -926,7 +926,7 @@ HTML = """
         } catch (_) {}
       }
 
-      async function resetData(){
+     /* async function resetData(){
         try {
           await fetch('/api/reset', { method: 'POST' });
           // Brief delay to allow reload of charts from empty state
@@ -934,12 +934,12 @@ HTML = """
             refreshAds();
           }, 250);
         } catch (_) {}
-      }
+      } */
 
       setInterval(refreshAds, 3000);
       refreshAds();
 
-      document.getElementById('resetBtn').addEventListener('click', resetData);
+     <!-- document.getElementById('resetBtn').addEventListener('click', resetData); -->
 
       connect();
     </script>
